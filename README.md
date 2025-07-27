@@ -1,2 +1,2 @@
 # EmoBot
-An application to help my friends make more friends : ) 
+An discord bot to help my friends make more friends : ) 
