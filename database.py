@@ -1,8 +1,7 @@
 import os
 import asyncpg
-from typing import List, Optional
+from typing import List, Optional, Set
 from dataclasses import dataclass
-import json
 
 @dataclass
 class UserProfile:
@@ -19,70 +18,170 @@ class UserProfile:
     async def find_by_discord_id(cls, discord_id: str) -> Optional['UserProfile']:
         pool = get_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM user_profiles WHERE discord_id = $1", 
+            user_row = await conn.fetchrow(
+                "SELECT * FROM users WHERE discord_id = $1", 
                 discord_id
             )
-            if row:
-                return cls(
-                    discord_id=row['discord_id'],
-                    username=row['username'],
-                    games=json.loads(row['games']),
-                    artists=json.loads(row['artists']),
-                    interests=json.loads(row['interests']),
-                    scanning_enabled=row['scanning_enabled'],
-                    last_processed_message=row['last_processed_message'],
-                    id=row['id']
-                )
-        return None
+            if not user_row:
+                return None
+            
+            user_id = user_row['id']
+            
+            games = await conn.fetch("""
+                SELECT g.name FROM games g
+                JOIN user_games ug ON g.id = ug.game_id
+                WHERE ug.user_id = $1
+            """, user_id)
+            
+            artists = await conn.fetch("""
+                SELECT a.name FROM artists a
+                JOIN user_artists ua ON a.id = ua.artist_id
+                WHERE ua.user_id = $1
+            """, user_id)
+            
+            interests = await conn.fetch("""
+                SELECT i.name FROM interests i
+                JOIN user_interests ui ON i.id = ui.interest_id
+                WHERE ui.user_id = $1
+            """, user_id)
+            
+            return cls(
+                discord_id=user_row['discord_id'],
+                username=user_row['username'],
+                games=[row['name'] for row in games],
+                artists=[row['name'] for row in artists],
+                interests=[row['name'] for row in interests],
+                scanning_enabled=user_row['scanning_enabled'],
+                last_processed_message=user_row['last_processed_message'],
+                id=user_row['id']
+            )
     
     @classmethod
     async def find_all_except(cls, discord_id: str) -> List['UserProfile']:
         pool = get_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT * FROM user_profiles WHERE discord_id != $1", 
+            user_rows = await conn.fetch(
+                "SELECT * FROM users WHERE discord_id != $1", 
                 discord_id
             )
+            
             profiles = []
-            for row in rows:
+            for user_row in user_rows:
+                user_id = user_row['id']
+                
+                games = await conn.fetch("""
+                    SELECT g.name FROM games g
+                    JOIN user_games ug ON g.id = ug.game_id
+                    WHERE ug.user_id = $1
+                """, user_id)
+                
+                artists = await conn.fetch("""
+                    SELECT a.name FROM artists a
+                    JOIN user_artists ua ON a.id = ua.artist_id
+                    WHERE ua.user_id = $1
+                """, user_id)
+                
+                interests = await conn.fetch("""
+                    SELECT i.name FROM interests i
+                    JOIN user_interests ui ON i.id = ui.interest_id
+                    WHERE ui.user_id = $1
+                """, user_id)
+                
                 profiles.append(cls(
-                    discord_id=row['discord_id'],
-                    username=row['username'],
-                    games=json.loads(row['games']),
-                    artists=json.loads(row['artists']),
-                    interests=json.loads(row['interests']),
-                    scanning_enabled=row['scanning_enabled'],
-                    last_processed_message=row['last_processed_message'],
-                    id=row['id']
+                    discord_id=user_row['discord_id'],
+                    username=user_row['username'],
+                    games=[row['name'] for row in games],
+                    artists=[row['name'] for row in artists],
+                    interests=[row['name'] for row in interests],
+                    scanning_enabled=user_row['scanning_enabled'],
+                    last_processed_message=user_row['last_processed_message'],
+                    id=user_row['id']
                 ))
+            
             return profiles
     
     async def save(self):
         pool = get_pool()
         async with pool.acquire() as conn:
-            games_json = json.dumps(self.games)
-            artists_json = json.dumps(self.artists)
-            interests_json = json.dumps(self.interests)
-            
-            if self.id:
-                await conn.execute(
-                    """UPDATE user_profiles 
-                       SET username = $1, games = $2, artists = $3, interests = $4, 
-                           scanning_enabled = $5, last_processed_message = $6
-                       WHERE id = $7""",
-                    self.username, games_json, artists_json, interests_json,
-                    self.scanning_enabled, self.last_processed_message, self.id
-                )
-            else:
-                row = await conn.fetchrow(
-                    """INSERT INTO user_profiles 
-                       (discord_id, username, games, artists, interests, scanning_enabled, last_processed_message)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id""",
-                    self.discord_id, self.username, games_json, artists_json, 
-                    interests_json, self.scanning_enabled, self.last_processed_message
-                )
-                self.id = row['id']
+            async with conn.transaction():
+                if self.id:
+                    await conn.execute(
+                        """UPDATE users 
+                           SET username = $1, scanning_enabled = $2, last_processed_message = $3
+                           WHERE id = $4""",
+                        self.username, self.scanning_enabled, self.last_processed_message, self.id
+                    )
+                    user_id = self.id
+                else:
+                    row = await conn.fetchrow(
+                        """INSERT INTO users 
+                           (discord_id, username, scanning_enabled, last_processed_message)
+                           VALUES ($1, $2, $3, $4) RETURNING id""",
+                        self.discord_id, self.username, self.scanning_enabled, self.last_processed_message
+                    )
+                    user_id = row['id']
+                    self.id = user_id
+                
+                await _update_user_relationships(conn, user_id, 'games', 'user_games', 'game_id', self.games)
+                await _update_user_relationships(conn, user_id, 'artists', 'user_artists', 'artist_id', self.artists)
+                await _update_user_relationships(conn, user_id, 'interests', 'user_interests', 'interest_id', self.interests)
+
+async def _update_user_relationships(conn, user_id: int, table_name: str, junction_table: str, foreign_key: str, items: List[str]):
+    await conn.execute(f"DELETE FROM {junction_table} WHERE user_id = $1", user_id)
+    
+    for item in items:
+        item_row = await conn.fetchrow(f"SELECT id FROM {table_name} WHERE name = $1", item)
+        if not item_row:
+            item_row = await conn.fetchrow(f"INSERT INTO {table_name} (name) VALUES ($1) RETURNING id", item)
+        
+        item_id = item_row['id']
+        await conn.execute(f"INSERT INTO {junction_table} (user_id, {foreign_key}) VALUES ($1, $2)", user_id, item_id)
+
+async def find_users_with_game(game_name: str) -> List[str]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT u.discord_id FROM users u
+            JOIN user_games ug ON u.id = ug.user_id
+            JOIN games g ON ug.game_id = g.id
+            WHERE g.name = $1
+        """, game_name)
+        return [row['discord_id'] for row in rows]
+
+async def find_users_with_artist(artist_name: str) -> List[str]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT u.discord_id FROM users u
+            JOIN user_artists ua ON u.id = ua.user_id
+            JOIN artists a ON ua.artist_id = a.id
+            WHERE a.name = $1
+        """, artist_name)
+        return [row['discord_id'] for row in rows]
+
+async def find_users_with_interest(interest_name: str) -> List[str]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT u.discord_id FROM users u
+            JOIN user_interests ui ON u.id = ui.user_id
+            JOIN interests i ON ui.interest_id = i.id
+            WHERE i.name = $1
+        """, interest_name)
+        return [row['discord_id'] for row in rows]
+
+async def get_popular_games(limit: int = 10) -> List[tuple]:
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT g.name, COUNT(*) as user_count
+            FROM games g
+            JOIN user_games ug ON g.id = ug.game_id
+            GROUP BY g.id, g.name
+            ORDER BY user_count DESC
+            LIMIT $1
+        """, limit)
+        return [(row['name'], row['user_count']) for row in rows]
 
 _pool = None
 
@@ -102,15 +201,57 @@ async def init_db():
             
             async with _pool.acquire() as conn:
                 await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS user_profiles (
+                    CREATE TABLE IF NOT EXISTS users (
                         id SERIAL PRIMARY KEY,
                         discord_id VARCHAR(255) UNIQUE NOT NULL,
                         username VARCHAR(255) NOT NULL,
-                        games TEXT NOT NULL DEFAULT '[]',
-                        artists TEXT NOT NULL DEFAULT '[]',
-                        interests TEXT NOT NULL DEFAULT '[]',
                         scanning_enabled BOOLEAN DEFAULT TRUE,
                         last_processed_message TEXT
+                    )
+                ''')
+                
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS games (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(255) UNIQUE NOT NULL
+                    )
+                ''')
+                
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS artists (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(255) UNIQUE NOT NULL
+                    )
+                ''')
+                
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS interests (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(255) UNIQUE NOT NULL
+                    )
+                ''')
+                
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS user_games (
+                        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                        game_id INTEGER REFERENCES games(id) ON DELETE CASCADE,
+                        PRIMARY KEY (user_id, game_id)
+                    )
+                ''')
+                
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS user_artists (
+                        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                        artist_id INTEGER REFERENCES artists(id) ON DELETE CASCADE,
+                        PRIMARY KEY (user_id, artist_id)
+                    )
+                ''')
+                
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS user_interests (
+                        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                        interest_id INTEGER REFERENCES interests(id) ON DELETE CASCADE,
+                        PRIMARY KEY (user_id, interest_id)
                     )
                 ''')
             
