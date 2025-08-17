@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Login - EmoBot OAuth{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>🤖 EmoBot</h1>
+    <p>Connect with people who share your interests</p>
+</div>
+
+<div style="text-align: center;">
+    <h2>Sign in with your account</h2>
+    <p>Choose your preferred login method:</p>
+    
+    <div style="margin: 2rem 0;">
+        <a href="/login/discord" class="btn btn-discord">
+            🎮 Login with Discord
+        </a>
+        <br>
+        <a href="/login/google" class="btn btn-google">
+            📧 Login with Google
+        </a>
+        <br>
+        <a href="/login/github" class="btn btn-github">
+            💻 Login with GitHub
+        </a>
+    </div>
+    
+    <p style="color: #666; font-size: 0.9rem; margin-top: 2rem;">
+        By signing in, you agree to connect your account with EmoBot to manage your profile and find matches based on shared interests.
+    </p>
+</div>
+{% endblock %}

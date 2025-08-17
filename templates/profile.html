@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}Profile - EmoBot OAuth{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>🤖 EmoBot Profile</h1>
+    <div style="text-align: right;">
+        <a href="/logout" class="btn btn-logout">Logout</a>
+    </div>
+</div>
+
+<div class="user-info">
+    <div style="display: flex; align-items: center;">
+        {% if user.avatar %}
+        <img src="{{ user.avatar }}" alt="Avatar" class="avatar">
+        {% endif %}
+        <div>
+            <h3>{{ user.username }}</h3>
+            <p style="margin: 0; color: #666;">
+                Logged in with {{ user.provider|title }}
+                {% if user.email %}• {{ user.email }}{% endif %}
+            </p>
+        </div>
+    </div>
+</div>
+
+{% if profile %}
+<div class="profile-section">
+    <h3>🎮 Games</h3>
+    {% if profile.games %}
+    <div class="tags">
+        {% for game in profile.games %}
+        <span class="tag">{{ game }}</span>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p style="color: #666;">No games added yet</p>
+    {% endif %}
+</div>
+
+<div class="profile-section">
+    <h3>🎵 Artists</h3>
+    {% if profile.artists %}
+    <div class="tags">
+        {% for artist in profile.artists %}
+        <span class="tag">{{ artist }}</span>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p style="color: #666;">No artists added yet</p>
+    {% endif %}
+</div>
+
+<div class="profile-section">
+    <h3>💡 Interests</h3>
+    {% if profile.interests %}
+    <div class="tags">
+        {% for interest in profile.interests %}
+        <span class="tag">{{ interest }}</span>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p style="color: #666;">No interests added yet</p>
+    {% endif %}
+</div>
+
+<div class="profile-section">
+    <h3>⚙️ Settings</h3>
+    <p style="color: #666;">
+        Message scanning: 
+        <strong>{{ "Enabled" if profile.scanning_enabled else "Disabled" }}</strong>
+    </p>
+</div>
+
+{% else %}
+<div class="profile-section">
+    {% if user.discord_id %}
+    <p style="color: #666; text-align: center;">
+        No EmoBot profile found for your Discord account.<br>
+        Start using the bot in Discord to create your profile!
+    </p>
+    {% else %}
+    <p style="color: #666; text-align: center;">
+        To access your EmoBot profile, please log in with your Discord account.
+    </p>
+    <div style="text-align: center; margin-top: 1rem;">
+        <a href="/login/discord" class="btn btn-discord">
+            🎮 Link Discord Account
+        </a>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<div style="text-align: center; margin-top: 2rem;">
+    <p style="color: #666; font-size: 0.9rem;">
+        To add interests and find matches, use the EmoBot commands in Discord:<br>
+        <code>/add_interest</code>, <code>/profile</code>, <code>/enable_scanning</code>
+    </p>
+</div>
+{% endblock %}
